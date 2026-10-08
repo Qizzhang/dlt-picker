@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#0d6efd">
+<link rel="manifest" href="manifest.json">
+<title>大乐透选号</title>
+<style>
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: #f4f6fa; color: #222; padding: 12px 14px 90px;
+    max-width: 560px; margin: 0 auto;
+  }
+  h1 { font-size: 20px; margin: 6px 0 4px; }
+  .sub { color: #777; font-size: 12px; margin-bottom: 14px; }
+  .card {
+    background: #fff; border-radius: 14px; padding: 14px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.06); margin-bottom: 12px;
+  }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; }
+  button {
+    flex: 1; min-width: 110px; padding: 12px; border: 0; border-radius: 10px;
+    font-size: 15px; font-weight: 600; color: #fff; background: #0d6efd;
+  }
+  button.sec { background: #6c757d; }
+  button.ok  { background: #198754; }
+  button:disabled { opacity: .5; }
+  .balls { display: flex; gap: 6px; flex-wrap: wrap; margin: 8px 0; }
+  .b {
+    width: 34px; height: 34px; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    color: #fff; font-weight: 700; font-size: 15px;
+  }
+  .b.f { background: #dc3545; }   /* 前区红球 */
+  .b.k { background: #0d6efd; }   /* 后区蓝球 */
+  .ticket {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 8px 4px; border-bottom: 1px solid #eef0f4;
+  }
+  .ticket:last-child { border-bottom: 0; }
+  .no { color: #999; font-size: 12px; width: 28px; }
+  .status { font-size: 12px; color: #666; margin-top: 6px; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs div {
+    flex: 1; text-align: center; padding: 9px; border-radius: 10px;
+    background: #e9edf3; font-size: 14px; font-weight: 600; color: #555;
+  }
+  .tabs div.on { background: #0d6efd; color: #fff; }
+  .hide { display: none; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  td, th { padding: 6px 4px; text-align: left; border-bottom: 1px solid #eef0f4; }
+  th { color: #888; font-weight: 600; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<h1>🎯 大乐透选号助手</h1>
+<div class="sub" id="status">准备就绪</div>
+
+<div class="tabs">
+  <div class="on" data-tab="pick">选号</div>
+  <div data-tab="stat">统计</div>
+  <div data-tab="about">说明</div>
+</div>
+
+<!-- ===== 选号 ===== -->
+<section id="tab-pick">
+  <div class="card">
+    <div class="row">
+      <button class="ok" id="btnFetch">更新数据</button>
+      <button id="btnPick">生成选号</button>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button class="sec" id="btnMore">再生成一批</button>
+      <button class="sec" id="btnClear">清空</button>
+    </div>
+    <div class="status" id="dataInfo">尚未加载数据</div>
+  </div>
+
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:6px">推荐号码</div>
+    <div id="tickets"></div>
+  </div>
+</section>
+
+<!-- ===== 统计 ===== -->
+<section id="tab-stat" class="hide">
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:6px">前区号码频次（最近 200 期）</div>
+    <table id="frontStat"><thead><tr><th>号码</th><th>次数</th><th>概率</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <div style="font-weight:700;margin-bottom:6px">后区号码频次（最近 200 期）</div>
+    <table id="backStat"><thead><tr><th>号码</th><th>次数</th><th>概率</th></tr></thead><tbody></tbody></table>
+  </div>
+</section>
+
+<!-- ===== 说明 ===== -->
+<section id="tab-about" class="hide">
+  <div class="card">
+    <p><b>功能</b>：从 GitHub 拉取大乐透历史开奖数据，做频次/近期热度统计，
+    再用加权随机 + Monte Carlo 排序生成推荐号码。</p>
+    <p><b>免责</b>：彩票开奖是独立随机事件，本工具仅供娱乐与统计学习，
+    不构成任何投注建议，也不能保证中奖。</p>
+    <p><b>离线</b>：数据会缓存到本地，断网也能继续用上一次的数据。</p>
+  </div>
+</section>
+
+<script>
+/* ===================== 配置 ===================== */
+const DATA_URL = 'https://raw.githubusercontent.com/Justdoitfor/my-lottery-data/main/data/dlt.json';
+const FRONT_MAX = 35, BACK_MAX = 12;
+const FRONT_CNT = 5,  BACK_CNT = 2;
+const WINDOW    = 200;     // 统计窗口
+const MC_TIMES  = 20000;   // Monte Carlo 采样次数
+const TOPK      = 5;       // 每次推荐注数
+
+/* ===================== 状态 ===================== */
+let draws = [];            // [{issue, front:[...], back:[...]}]
+let pF = [], pB = [];      // 概率向量
+
+const $ = s => document.querySelector(s);
+const $$ = s => document.querySelectorAll(s);
+
+/* ===================== 工具 ===================== */
+function setStatus(t){ $('#status').textContent = t; }
+
+function randInt(n){ return Math.floor(Math.random()*n); }
+
+function weightedSample(prob, k, maxN){
+  // 无放回按概率抽 k 个不同号码，返回排序后的数组
+  const pool = [...Array(maxN).keys()].map(i=>i+1);
+  const w = pool.map(n=>prob[n-1] || 1e-9);
+  const picked = [];
+  for (let i=0;i<k;i++){
+    let sum = w.reduce((a,b)=>a+b,0);
+    let r = Math.random()*sum, acc = 0, idx = 0;
+    for (let j=0;j<pool.length;j++){
+      acc += w[j];
+      if (acc >= r){ idx = j; break; }
+    }
+    picked.push(pool[idx]);
+    pool.splice(idx,1); w.splice(idx,1);
+  }
+  return picked.sort((a,b)=>a-b);
+}
+
+/* ===================== 数据加载 ===================== */
+async function fetchData(){
+  setStatus('正在从 GitHub 获取数据...');
+  try {
+    const res = await fetch(DATA_URL + '?t=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const raw = await res.json();
+    draws = parseData(raw);
+    localStorage.setItem('dlt_draws', JSON.stringify(draws));
+    localStorage.setItem('dlt_time', new Date().toLocaleString());
+    updateDataInfo();
+    computeProb();
+    setStatus('数据更新成功');
+  } catch(e){
+    setStatus('网络失败，尝试使用本地缓存');
+    loadCache();
+  }
+}
+
+function parseData(raw){
+  if (raw && raw.data) raw = raw.data;
+  if (!Array.isArray(raw)) raw = [raw];
+  const out = [];
+  for (const it of raw){
+    const issue = +(it.issue || it.issueNumber || it.period);
+    const front = (it.front || it.frontBalls || []).map(Number).filter(Number.isFinite);
+    const back  = (it.back  || it.backBalls  || []).map(Number).filter(Number.isFinite);
+    if (!issue || front.length!==5 || back.length!==2) continue;
+    if (new Set(front).size!==5 || new Set(back).size!==2) continue;
+    out.push({
+      issue,
+      front: front.sort((a,b)=>a-b),
+      back:  back.sort((a,b)=>a-b)
+    });
+  }
+  out.sort((a,b)=>a.issue-b.issue);
+  // 去重
+  const seen = new Set(), uniq = [];
+  for (const d of out){
+    if (seen.has(d.issue)) continue;
+    seen.add(d.issue); uniq.push(d);
+  }
+  return uniq;
+}
+
+function loadCache(){
+  const s = localStorage.getItem('dlt_draws');
+  if (s){
+    draws = JSON.parse(s);
+    computeProb();
+    updateDataInfo();
+    setStatus('已加载本地缓存');
+  } else {
+    setStatus('无可用数据，请联网后重试');
+  }
+}
+
+function updateDataInfo(){
+  if (!draws.length){ $('#dataInfo').textContent = '尚未加载数据'; return; }
+  const last = draws[draws.length-1];
+  const t = localStorage.getItem('dlt_time') || '本地缓存';
+  $('#dataInfo').innerHTML =
+    `共 <b>${draws.length}</b> 期 ｜ 最新期号 <b>${last.issue}</b><br>` +
+    `最近更新：${t}`;
+}
+
+/* ===================== 概率计算 ===================== */
+function computeProb(){
+  if (!draws.length) return;
+  const H = draws.slice(-WINDOW);
+
+  // 号码权重 = 长期频次 + 近期热度 + 遗漏补偿（一个简单但可解释的加权）
+  function calc(maxN, cnt){
+    const prob = new Array(maxN).fill(0);
+    const total = H.length;
+
+    for (let n=1;n<=maxN;n++){
+      let all = 0, recent = 0, lastIdx = -1;
+      for (let i=0;i<total;i++){
+        const hit = H[i].front && false; // placeholder
+      }
+    }
+    return prob;
+  }
+
+  const total = H.length;
+
+  // 前区
+  pF = new Array(FRONT_MAX).fill(0);
+  for (let n=1;n<=FRONT_MAX;n++){
+    let all = 0, recent20 = 0, lastIdx = -1;
+    for (let i=0;i<total;i++){
+      if (H[i].front.includes(n)){
+        all++; lastIdx = i;
+        if (i >= total-20) recent20++;
+      }
+    }
+    const omission = lastIdx<0 ? total : (total-1-lastIdx);
+    const base     = (all + 1) / (total + 1);          // 平滑频次
+    const hot      = (recent20 + 1) / 21;              // 近期热度
+    const cold     = Math.min(omission, 30) / 30 * 0.05; // 遗漏补偿（最多 5%）
+    pF[n-1] = base * 0.7 + hot * 0.25 + cold;
+  }
+  normalize(pF);
+
+  // 后区
+  pB = new Array(BACK_MAX).fill(0);
+  for (let n=1;n<=BACK_MAX;n++){
+    let all = 0, recent20 = 0, lastIdx = -1;
+    for (let i=0;i<total;i++){
+      if (H[i].back.includes(n)){
+        all++; lastIdx = i;
+        if (i >= total-20) recent20++;
+      }
+    }
+    const omission = lastIdx<0 ? total : (total-1-lastIdx);
+    const base = (all + 1) / (total + 1);
+    const hot  = (recent20 + 1) / 21;
+    const cold = Math.min(omission, 30) / 30 * 0.05;
+    pB[n-1] = base * 0.7 + hot * 0.25 + cold;
+  }
+  normalize(pB);
+
+  renderStat();
+}
+
+function normalize(p){
+  const s = p.reduce((a,b)=>a+b,0) || 1;
+  for (let i=0;i<p.length;i++) p[i] = Math.max(p[i]/s, 1e-9);
+  const s2 = p.reduce((a,b)=>a+b,0);
+  for (let i=0;i<p.length;i++) p[i] /= s2;
+}
+
+/* ===================== 选号（Monte Carlo + log 概率排序） ===================== */
+function generateTickets(){
+  if (!draws.length){ alert('请先更新数据'); return []; }
+
+  const best = new Map(); // key -> {score, front, back}
+
+  for (let t=0;t<MC_TIMES;t++){
+    const front = weightedSample(pF, FRONT_CNT, FRONT_MAX);
+    const back  = weightedSample(pB, BACK_CNT,  BACK_MAX);
+
+    // 联合 log 概率评分
+    let score = 0;
+    for (const n of front) score += Math.log(pF[n-1]);
+    for (const n of back)  score += Math.log(pB[n-1]);
+
+    const key = front.join(',') + '|' + back.join(',');
+    const old = best.get(key);
+    if (!old || score > old.score){
+      best.set(key, { score, front, back });
+    }
+  }
+
+  return [...best.values()]
+    .sort((a,b)=>b.score-a.score)
+    .slice(0, TOPK);
+}
+
+/* ===================== 渲染 ===================== */
+function ballHTML(n, type){
+  return `<div class="b ${type}">${String(n).padStart(2,'0')}</div>`;
+}
+
+function renderTickets(list){
+  const box = $('#tickets');
+  if (!list.length){ box.innerHTML = '<div class="status">暂无推荐</div>'; return; }
+  box.innerHTML = list.map((t,i)=>`
+    <div class="ticket">
+      <div class="no">${i+1}</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <div class="balls">${t.front.map(n=>ballHTML(n,'f')).join('')}</div>
+        <div class="balls">${t.back.map(n=>ballHTML(n,'k')).join('')}</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderStat(){
+  const tbF = $('#frontStat tbody');
+  const tbB = $('#backStat tbody');
+
+  const rowsF = pF.map((p,i)=>({n:i+1,p}))
+    .sort((a,b)=>b.p-a.p)
+    .map(r=>`<tr><td>${String(r.n).padStart(2,'0')}</td>
+      <td>${(r.p*100).toFixed(2)}%</td>
+      <td>${r.p.toFixed(4)}</td></tr>`).join('');
+
+  const rowsB = pB.map((p,i)=>({n:i+1,p}))
+    .sort((a,b)=>b.p-a.p)
+    .map(r=>`<tr><td>${String(r.n).padStart(2,'0')}</td>
+      <td>${(r.p*100).toFixed(2)}%</td>
+      <td>${r.p.toFixed(4)}</td></tr>`).join('');
+
+  tbF.innerHTML = rowsF;
+  tbB.innerHTML = rowsB;
+}
+
+/* ===================== 事件绑定 ===================== */
+$('#btnFetch').onclick = fetchData;
+
+$('#btnPick').onclick = () => {
+  setStatus('正在生成候选号码...');
+  setTimeout(()=>{
+    const list = generateTickets();
+    renderTickets(list);
+    setStatus('已生成 ' + list.length + ' 注推荐');
+  }, 30);
+};
+
+$('#btnMore').onclick = () => $('#btnPick').onclick();
+
+$('#btnClear').onclick = () => {
+  $('#tickets').innerHTML = '';
+  setStatus('已清空');
+};
+
+$$('.tabs div').forEach(el=>{
+  el.onclick = () => {
+    $$('.tabs div').forEach(x=>x.classList.remove('on'));
+    el.classList.add('on');
+    $$('section').forEach(s=>s.classList.add('hide'));
+    $('#tab-'+el.dataset.tab).classList.remove('hide');
+  };
+});
+
+/* ===================== 启动 ===================== */
+loadCache();
+</script>
+</body>
+</html>
